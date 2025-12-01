@@ -64,7 +64,7 @@ def analyze_image_mock(image):
         """
 
         response = client.models.generate_content(
-            model='gemini-1.5-flash', # Switched to 1.5 Flash (Stable & Fast)
+            model='gemini-1.5-flash-002', # FIXED: Using specific stable version
             contents=[
                 types.Content(
                     role="user",
@@ -84,7 +84,7 @@ def analyze_image_mock(image):
         st.error(f"Gemini Analysis Failed: {e}")
         return {"detected_type": "Error", "description": str(e), "suggested_tags": []}
 
-# --- 2. NANO BANANA (Gemini 2.5 Flash Image) ---
+# --- 2. IMAGEN 3 (The Artist) ---
 def generate_product_variations(original_image):
     generated_images = []
     if not client: return [original_image]
@@ -95,23 +95,13 @@ def generate_product_variations(original_image):
 
         prompt = "Generate a professional product photo of this object from a slightly different side angle. Studio lighting, white background. High fidelity."
 
-        response = client.models.generate_content(
-            model='gemini-2.5-flash-image', # Still using 2.5 for Generation (Best Quality)
-            contents=[
-                types.Content(
-                    role="user",
-                    parts=[
-                        types.Part.from_bytes(data=image_bytes, mime_type="image/jpeg"),
-                        types.Part.from_text(text=prompt)
-                    ]
-                )
-            ],
-            config=types.GenerateContentConfig(
-                response_modalities=["IMAGE"],
-                image_generation_config=types.ImageGenerationConfig(
-                    number_of_images=3,
-                    aspect_ratio="1:1"
-                )
+        # FIXED: Switched directly to Imagen 3 (Stable) instead of experimental alias
+        response = client.models.generate_images(
+            model='imagen-3.0-generate-001',
+            prompt=prompt,
+            config=types.GenerateImagesConfig(
+                number_of_images=3,
+                aspect_ratio="1:1"
             )
         )
 
@@ -123,19 +113,9 @@ def generate_product_variations(original_image):
         return generated_images
 
     except Exception as e:
-        # Fallback to Imagen 3 if 2.5 Nano Banana isn't available yet
-        try:
-            response = client.models.generate_images(
-                model='imagen-3.0-generate-001',
-                prompt=prompt,
-                config=types.GenerateImagesConfig(number_of_images=3)
-            )
-            for img_blob in response.generated_images:
-                image_data = img_blob.image.image_bytes
-                generated_images.append(Image.open(BytesIO(image_data)))
-            return generated_images
-        except:
-             return [original_image]
+        st.error(f"Image Generation Failed: {e}")
+        # Return original image as fallback so app doesn't break
+        return [original_image]
 
 # --- 3. DATABASE ---
 def init_db():
