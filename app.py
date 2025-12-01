@@ -4,9 +4,9 @@ import utils
 # Initialize Database
 utils.init_db()
 
-st.set_page_config(page_title="Nano Banana Hub", page_icon="🍌", layout="wide")
+st.set_page_config(page_title="Furnicon", page_icon="🍌", layout="wide")
 
-st.title("🍌 Nano Banana System")
+st.title("Furnicon System")
 st.subheader("Internal Prototype: Phase 1")
 
 st.markdown("""
