@@ -1,15 +1,16 @@
 import streamlit as st
 import json
 import time
-import requests # Required for Pollinations
 from PIL import Image
 from io import BytesIO
 
 # --- CONFIGURATION ---
 try:
+    # Works for Tier 1 Keys
     GOOGLE_API_KEY = st.secrets["GOOGLE_API_KEY"]
 except (FileNotFoundError, KeyError):
-    GOOGLE_API_KEY = "PASTE_YOUR_KEY_HERE_IF_SECRETS_FAIL"
+    st.error("Missing .streamlit/secrets.toml")
+    st.stop()
 
 try:
     from google import genai
@@ -22,41 +23,72 @@ except ImportError:
 try:
     client = genai.Client(api_key=GOOGLE_API_KEY)
 except Exception as e:
+    st.error(f"Client Error: {e}")
     client = None
 
-# --- HELPER: OPTIMIZE IMAGE ---
+# --- HELPER ---
 def optimize_image(image):
     img_copy = image.copy()
-    img_copy.thumbnail((800, 800))
+    img_copy.thumbnail((1024, 1024))
     if img_copy.mode in ("RGBA", "P"):
         img_copy = img_copy.convert("RGB")
     img_byte_arr = BytesIO()
-    img_copy.save(img_byte_arr, format='JPEG', quality=80)
+    img_copy.save(img_byte_arr, format='JPEG', quality=85)
     return img_byte_arr.getvalue()
 
-# --- 1. TEXT ANALYST (STRICTLY GEMINI 2.5 FLASH) ---
+# --- 1. AMAZON ANALYST (Tier 1 Power) ---
 def analyze_image_mock(image):
-    if not client: return {"detected_type": "Config Error", "description": "API Client not initialized.", "suggested_tags": []}
+    if not client: return {}
 
     image_bytes = optimize_image(image)
     
+    # Prompt for Dynamic Amazon Specs
     prompt = """
-    Analyze this product image for an e-commerce database.
-    Return ONLY a JSON object with these keys:
-    - detected_type (e.g. 'Velvet Armchair')
-    - primary_material
-    - color
-    - description (concise visual description, max 20 words)
-    - suggested_tags (list of 5 strings)
+    You are an Amazon Catalog Specialist. Analyze this product image.
+    1. Identify the Category (e.g. Chair, Lamp, Table).
+    2. Extract the 8 most critical technical specifications for that category.
+    
+    Return a pure JSON object with this structure:
+    {
+        "title": "SEO Title (Brand + Spec + Type)",
+        "description": "3-sentence technical description.",
+        "category": "Detected Category",
+        "price_estimate": 199.99,
+        "technical_specifications": {
+            "Material": "...",
+            "Color": "...",
+            "Dimensions": "...",
+            "Assembly": "...",
+            "Key Feature": "...",
+            ... (Add category-specific fields)
+        }
+    }
     """
 
-    # STRICT PRIORITY: Gemini 2.5 Flash is FIRST
-    models = ["gemini-2.5-flash", "gemini-1.5-flash-002", "gemini-1.5-flash"]
+    try:
+        # We use Gemini 2.0 Flash Exp because it is smarter at JSON than 1.5
+        response = client.models.generate_content(
+            model='gemini-2.0-flash-exp',
+            contents=[
+                types.Content(
+                    role="user",
+                    parts=[
+                        types.Part.from_bytes(data=image_bytes, mime_type="image/jpeg"),
+                        types.Part.from_text(text=prompt)
+                    ]
+                )
+            ],
+            config=types.GenerateContentConfig(
+                response_mime_type="application/json"
+            )
+        )
+        return json.loads(response.text)
 
-    for model in models:
+    except Exception as e:
+        # Fallback to 1.5 Flash if 2.0 is busy (Tier 1 usually allows both)
         try:
             response = client.models.generate_content(
-                model=model, 
+                model='gemini-1.5-flash',
                 contents=[
                     types.Content(
                         role="user",
@@ -66,57 +98,74 @@ def analyze_image_mock(image):
                         ]
                     )
                 ],
-                config=types.GenerateContentConfig(response_mime_type="application/json")
+                config=types.GenerateContentConfig(
+                    response_mime_type="application/json"
+                )
             )
             return json.loads(response.text)
-        except Exception:
-            continue
+        except:
+            st.error(f"Analysis Error: {e}")
+            return {}
 
-    return {
-        "detected_type": "Analysis Failed",
-        "description": "Could not connect to Google AI.",
-        "suggested_tags": []
-    }
+# --- 2. IMAGE CONSISTENCY (Image-to-Image) ---
+def generate_product_variations(original_image):
+    """
+    Uses Gemini 2.0 Flash (Multimodal) to rotate the object.
+    Since you are Tier 1, we can send the image bytes directly.
+    """
+    if not client: return [original_image]
 
-# --- 2. IMAGE GENERATION (Pollinations - 60s TIMEOUT) ---
-def generate_product_variations(original_image, product_description="High end furniture product"):
-    """
-    Uses Pollinations.ai (Flux Model).
-    Increased timeout to 60s to prevent crashes on slow generations.
-    """
+    image_bytes = optimize_image(original_image)
     generated_images = []
     
-    # Clean the prompt for the URL
-    base_prompt = f"professional product photography of {product_description}, cinematic lighting, 8k, photorealistic, white background"
-    encoded_prompt = base_prompt.replace(" ", "%20").replace(",", "%2C")
+    # 3 Specific Views for E-commerce
+    prompts = [
+        "Generate a photorealistic image of THIS object viewed from the left side. White background.",
+        "Generate a photorealistic image of THIS object viewed from the right side. White background.",
+        "Generate a close-up detail shot of the material texture of THIS object."
+    ]
+
+    st.toast("🎨 Generating Consistent Angles (Tier 1 GPU)...")
+
+    for p in prompts:
+        try:
+            response = client.models.generate_content(
+                model='gemini-2.0-flash-exp', # The only model that does I2I well
+                contents=[
+                    types.Content(
+                        role="user",
+                        parts=[
+                            types.Part.from_text(text=p),
+                            types.Part.from_bytes(data=image_bytes, mime_type="image/jpeg") # INPUT IMAGE
+                        ]
+                    )
+                ],
+                config=types.GenerateContentConfig(
+                    response_modalities=["IMAGE"],
+                    image_generation_config=types.ImageGenerationConfig(
+                        number_of_images=1
+                    )
+                )
+            )
+            
+            if response.generated_images:
+                for img_blob in response.generated_images:
+                    image_data = img_blob.image.image_bytes
+                    generated_images.append(Image.open(BytesIO(image_data)))
+            
+            # Even on Tier 1, a tiny pause helps prevent "Burst" limits
+            time.sleep(1)
+
+        except Exception as e:
+            print(f"Angle Gen Error: {e}")
+            # If I2I fails, we silently skip that angle rather than crashing
+            pass
     
-    st.toast(f"🎨 Furnicon is generating 3 variations (Wait ~45s)...")
-
-    try:
-        # Generate 3 variations
-        for i in range(3):
-            # Using 'flux' model which is high quality but slow. 
-            # Added nologo=true to remove watermarks.
-            url = f"https://image.pollinations.ai/prompt/{encoded_prompt}?width=1024&height=1024&model=flux&seed={i+100}&nologo=true"
-            
-            # FIXED: Increased timeout from 30s to 60s
-            response = requests.get(url, timeout=60)
-            
-            if response.status_code == 200:
-                img_bytes = BytesIO(response.content)
-                img = Image.open(img_bytes)
-                generated_images.append(img)
-            else:
-                print(f"Pollinations Error: {response.status_code}")
+    if not generated_images:
+        st.warning("Could not generate variations. Returning original.")
+        return [original_image]
         
-        if generated_images:
-            return generated_images
-            
-    except Exception as e:
-        st.error(f"Generation Timeout/Error: {e}")
-
-    # Fallback: Return original if it still fails
-    return [original_image]
+    return generated_images
 
 # --- 3. DATABASE ---
 def init_db():
