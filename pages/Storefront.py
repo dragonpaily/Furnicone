@@ -1,10 +1,10 @@
 import streamlit as st
 import utils
 
-st.set_page_config(page_title="Live Store", page_icon="🛍️", layout="wide")
+st.set_page_config(page_title="Furnicon Store", page_icon="🛍️", layout="wide")
 
-st.title("🛍️ Modern Furniture Store")
-st.caption("Live view of the 'db_products' database")
+st.title("🛍️ Furnicon Store")
+st.caption("Live view of the database")
 
 products = utils.get_all_products()
 
