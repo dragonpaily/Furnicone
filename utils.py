@@ -1,12 +1,13 @@
 import streamlit as st
 import json
 import time
+import traceback
+import base64
 from PIL import Image
 from io import BytesIO
 
 # --- CONFIGURATION ---
 try:
-    # Works for Tier 1 Keys
     GOOGLE_API_KEY = st.secrets["GOOGLE_API_KEY"]
 except (FileNotFoundError, KeyError):
     st.error("Missing .streamlit/secrets.toml")
@@ -36,39 +37,41 @@ def optimize_image(image):
     img_copy.save(img_byte_arr, format='JPEG', quality=85)
     return img_byte_arr.getvalue()
 
-# --- 1. AMAZON ANALYST (Tier 1 Power) ---
+# --- ERROR LOGGER ---
+def log_error(context, error):
+    error_msg = f"❌ **Error in {context}:**\n\n{str(error)}"
+    st.session_state["global_error"] = error_msg
+    print(f"[{context}] {error}")
+
+# --- 1. AMAZON ANALYST (Reliable Flat JSON) ---
 def analyze_image_mock(image):
     if not client: return {}
 
-    image_bytes = optimize_image(image)
-    
-    # Prompt for Dynamic Amazon Specs
-    prompt = """
-    You are an Amazon Catalog Specialist. Analyze this product image.
-    1. Identify the Category (e.g. Chair, Lamp, Table).
-    2. Extract the 8 most critical technical specifications for that category.
-    
-    Return a pure JSON object with this structure:
-    {
-        "title": "SEO Title (Brand + Spec + Type)",
-        "description": "3-sentence technical description.",
-        "category": "Detected Category",
-        "price_estimate": 199.99,
-        "technical_specifications": {
-            "Material": "...",
-            "Color": "...",
-            "Dimensions": "...",
-            "Assembly": "...",
-            "Key Feature": "...",
-            ... (Add category-specific fields)
-        }
-    }
-    """
-
     try:
-        # We use Gemini 2.0 Flash Exp because it is smarter at JSON than 1.5
+        image_bytes = optimize_image(image)
+        
+        # RESTORED: The specific, flat prompt that worked
+        prompt = """
+        Analyze this product image for an Amazon listing.
+        Return a pure JSON object with these EXACT keys:
+        {
+            "title": "SEO Product Title",
+            "description": "3-sentence technical description",
+            "brand_generic": "Suggested Brand Name",
+            "category": "General Category (e.g. Chair)",
+            "colour": "Main Color",
+            "frame_material": "Material",
+            "style": "Style",
+            "furniture_finish": "Finish",
+            "seat_height": "Height",
+            "seat_width": "Width",
+            "leg_style": "Leg Type",
+            "dimensions_str": "LxWxH cm"
+        }
+        """
+
         response = client.models.generate_content(
-            model='gemini-2.0-flash-exp',
+            model='gemini-2.5-flash', # Robust Text Model
             contents=[
                 types.Content(
                     role="user",
@@ -85,84 +88,101 @@ def analyze_image_mock(image):
         return json.loads(response.text)
 
     except Exception as e:
-        # Fallback to 1.5 Flash if 2.0 is busy (Tier 1 usually allows both)
-        try:
-            response = client.models.generate_content(
-                model='gemini-1.5-flash',
-                contents=[
-                    types.Content(
-                        role="user",
-                        parts=[
-                            types.Part.from_bytes(data=image_bytes, mime_type="image/jpeg"),
-                            types.Part.from_text(text=prompt)
-                        ]
-                    )
-                ],
-                config=types.GenerateContentConfig(
-                    response_mime_type="application/json"
-                )
-            )
-            return json.loads(response.text)
-        except:
-            st.error(f"Analysis Error: {e}")
-            return {}
+        log_error("Text Analysis", e)
+        return {}
 
-# --- 2. IMAGE CONSISTENCY (Image-to-Image) ---
-def generate_product_variations(original_image):
+# --- 2. IMAGE GENERATION (Gemini 2.5 Flash Image) ---
+def generate_product_variations(original_image, description=""):
     """
-    Uses Gemini 2.0 Flash (Multimodal) to rotate the object.
-    Since you are Tier 1, we can send the image bytes directly.
+    Uses gemini-2.5-flash-image with the Dictionary Config Fix to prevent crashes.
     """
     if not client: return [original_image]
 
     image_bytes = optimize_image(original_image)
     generated_images = []
     
-    # 3 Specific Views for E-commerce
+    # 3 Angles
     prompts = [
-        "Generate a photorealistic image of THIS object viewed from the left side. White background.",
-        "Generate a photorealistic image of THIS object viewed from the right side. White background.",
-        "Generate a close-up detail shot of the material texture of THIS object."
+        "Generate a photorealistic product image of this object viewed from the left side. White background.",
+        "Generate a photorealistic product image of this object viewed from the right side. White background.",
+        "Generate a close-up detail shot of the material texture."
     ]
 
-    st.toast("🎨 Generating Consistent Angles (Tier 1 GPU)...")
+    st.toast("🎨 Generating Angles (Gemini 2.5)...")
+    target_model = 'gemini-2.5-flash-image'
 
-    for p in prompts:
+    for i, p in enumerate(prompts):
+        success = False
+        
+        # --- ATTEMPT 1: Image-to-Image ---
         try:
+            # Using Pure Dict config to bypass SDK type errors
             response = client.models.generate_content(
-                model='gemini-2.0-flash-exp', # The only model that does I2I well
+                model=target_model,
                 contents=[
                     types.Content(
                         role="user",
                         parts=[
                             types.Part.from_text(text=p),
-                            types.Part.from_bytes(data=image_bytes, mime_type="image/jpeg") # INPUT IMAGE
+                            types.Part.from_bytes(data=image_bytes, mime_type="image/jpeg")
                         ]
                     )
                 ],
-                config=types.GenerateContentConfig(
-                    response_modalities=["IMAGE"],
-                    image_generation_config=types.ImageGenerationConfig(
-                        number_of_images=1
-                    )
-                )
+                config={ "response_modalities": ["IMAGE"] }
             )
             
-            if response.generated_images:
-                for img_blob in response.generated_images:
-                    image_data = img_blob.image.image_bytes
-                    generated_images.append(Image.open(BytesIO(image_data)))
-            
-            # Even on Tier 1, a tiny pause helps prevent "Burst" limits
-            time.sleep(1)
+            if hasattr(response, 'parts'):
+                for part in response.parts:
+                    if part.inline_data:
+                        img_bytes = part.inline_data.data
+                        if isinstance(img_bytes, str):
+                            img_bytes = base64.b64decode(img_bytes)
+                        
+                        img = Image.open(BytesIO(img_bytes))
+                        generated_images.append(img)
+                        success = True
 
         except Exception as e:
-            print(f"Angle Gen Error: {e}")
-            # If I2I fails, we silently skip that angle rather than crashing
+            # Silent fail for I2I, allow fallback
             pass
-    
+
+        # --- ATTEMPT 2: Text-to-Image Fallback ---
+        if not success:
+            try:
+                # Add description to prompt for context
+                text_prompt = f"{p} Object details: {description}. High fidelity, 4k."
+                
+                response = client.models.generate_content(
+                    model=target_model,
+                    contents=[
+                        types.Content(
+                            role="user",
+                            parts=[
+                                types.Part.from_text(text=text_prompt)
+                            ]
+                        )
+                    ],
+                    config={ "response_modalities": ["IMAGE"] }
+                )
+                
+                if hasattr(response, 'parts'):
+                    for part in response.parts:
+                        if part.inline_data:
+                            img_bytes = part.inline_data.data
+                            if isinstance(img_bytes, str):
+                                img_bytes = base64.b64decode(img_bytes)
+                            
+                            img = Image.open(BytesIO(img_bytes))
+                            generated_images.append(img)
+                            success = True
+            
+            except Exception as e:
+                log_error(f"Strategy B (T2I) Angle {i+1}", e)
+
+        time.sleep(1)
+
     if not generated_images:
-        st.warning("Could not generate variations. Returning original.")
+        st.warning("⚠️ Generation Failed. Returning original.")
         return [original_image]
         
     return generated_images
