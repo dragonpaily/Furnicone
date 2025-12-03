@@ -4,12 +4,12 @@ from PIL import Image
 
 st.set_page_config(page_title="Admin Bot", page_icon="🍌")
 
-st.title("🍌 Nano Banana Chat")
+st.title("🍌 Furnicon Chat")
 
 # --- CHAT HISTORY & STATE ---
 if "messages" not in st.session_state:
     st.session_state.messages = [
-        {"role": "assistant", "content": "👋 Hi! I'm Nano Banana. Upload a product image to start."}
+        {"role": "assistant", "content": "👋 Hi! I'm Furnicon AI. Upload a product image to start."}
     ]
 if "bot_status" not in st.session_state:
     st.session_state.bot_status = "awaiting_upload" 
@@ -44,14 +44,13 @@ if st.session_state.bot_status == "awaiting_upload":
         
         with st.chat_message("assistant"):
             # A. Vision Analysis
-            with st.spinner("Gemini is extracting details..."):
+            with st.spinner("Furnicon is extracting details..."):
                 ai_data = utils.analyze_image_mock(image)
                 st.session_state.draft_data = ai_data
                 st.session_state.draft_data["image_obj"] = image
             
             # B. Image Generation (Using Pollinations)
             # We construct a prompt using the data Gemini just found
-            # e.g. "Teal Velvet Lounge Chair"
             desc_for_gen = f"{ai_data.get('color', '')} {ai_data.get('primary_material', '')} {ai_data.get('detected_type', 'furniture')}"
             
             with st.spinner("Generating variations (Free Engine)..."):
@@ -60,7 +59,7 @@ if st.session_state.bot_status == "awaiting_upload":
             
             # Response
             desc = ai_data.get('description', 'No description')
-            response_text = f"✅ Analysis Complete.\n\n**Type:** {ai_data.get('detected_type')}\n**Material:** {ai_data.get('primary_material')}\n\n**Description:** {desc}\n\nI have generated {len(variations)} variations below using the Free Engine."
+            response_text = f"✅ Analysis Complete.\n\n**Type:** {ai_data.get('detected_type')}\n**Material:** {ai_data.get('primary_material')}\n\n**Description:** {desc}\n\nI have generated {len(variations)} variations below."
             st.write(response_text)
             
             # Show variations immediately
